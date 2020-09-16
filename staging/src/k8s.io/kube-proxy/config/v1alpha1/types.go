@@ -123,6 +123,9 @@ type KubeProxyConfiguration struct {
 	// bridge traffic coming from outside of the cluster. If not provided,
 	// no off-cluster bridging will be performed.
 	ClusterCIDR string `json:"clusterCIDR"`
+	// OldServiceCIDR is the CIDR range that was used by services before.
+	// If Service external IP address belongs to this block, it will be handled as if it is a ClusterIP.
+	OldServiceCIDR string `json:"oldServiceCIDR"`
 	// hostnameOverride, if non-empty, will be used as the identity instead of the actual hostname.
 	HostnameOverride string `json:"hostnameOverride"`
 	// clientConnection specifies the kubeconfig file and client connection settings for the proxy

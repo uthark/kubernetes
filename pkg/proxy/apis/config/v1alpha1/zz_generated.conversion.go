@@ -98,6 +98,7 @@ func autoConvert_v1alpha1_KubeProxyConfiguration_To_config_KubeProxyConfiguratio
 	out.MetricsBindAddress = in.MetricsBindAddress
 	out.EnableProfiling = in.EnableProfiling
 	out.ClusterCIDR = in.ClusterCIDR
+	out.OldServiceCIDR = in.OldServiceCIDR
 	out.HostnameOverride = in.HostnameOverride
 	if err := configv1alpha1.Convert_v1alpha1_ClientConnectionConfiguration_To_config_ClientConnectionConfiguration(&in.ClientConnection, &out.ClientConnection, s); err != nil {
 		return err
@@ -137,6 +138,7 @@ func autoConvert_config_KubeProxyConfiguration_To_v1alpha1_KubeProxyConfiguratio
 	out.MetricsBindAddress = in.MetricsBindAddress
 	out.EnableProfiling = in.EnableProfiling
 	out.ClusterCIDR = in.ClusterCIDR
+	out.OldServiceCIDR = in.OldServiceCIDR
 	out.HostnameOverride = in.HostnameOverride
 	if err := configv1alpha1.Convert_config_ClientConnectionConfiguration_To_v1alpha1_ClientConnectionConfiguration(&in.ClientConnection, &out.ClientConnection, s); err != nil {
 		return err
