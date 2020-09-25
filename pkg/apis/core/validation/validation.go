@@ -4258,9 +4258,9 @@ func ValidateServiceUpdate(service, oldService *core.Service) field.ErrorList {
 	// ClusterIP and IPFamily should be immutable for services using it (every type other than ExternalName)
 	// which do not have ClusterIP assigned yet (empty string value)
 	if service.Spec.Type != core.ServiceTypeExternalName {
-		if oldService.Spec.Type != core.ServiceTypeExternalName && oldService.Spec.ClusterIP != "" {
-			allErrs = append(allErrs, ValidateImmutableField(service.Spec.ClusterIP, oldService.Spec.ClusterIP, field.NewPath("spec", "clusterIP"))...)
-		}
+		//if oldService.Spec.Type != core.ServiceTypeExternalName && oldService.Spec.ClusterIP != "" {
+		//	allErrs = append(allErrs, ValidateImmutableField(service.Spec.ClusterIP, oldService.Spec.ClusterIP, field.NewPath("spec", "clusterIP"))...)
+		//}
 		// notes:
 		// we drop the IPFamily field when the Dualstack gate is off.
 		// once the gate is on, we start assigning default ipfamily according to cluster settings. in other words
