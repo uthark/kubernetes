@@ -225,6 +225,7 @@ func newProxyServer(
 				recorder,
 				healthzServer,
 				config.NodePortAddresses,
+				config.OldServiceCIDR,
 			)
 		} else { // Create a single-stack proxier.
 			var localDetector proxyutiliptables.LocalTrafficDetector
@@ -248,6 +249,7 @@ func newProxyServer(
 				recorder,
 				healthzServer,
 				config.NodePortAddresses,
+				config.OldServiceCIDR,
 			)
 		}
 

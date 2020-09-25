@@ -207,6 +207,7 @@ type Proxier struct {
 	nodeIP         net.IP
 	portMapper     utilproxy.PortOpener
 	recorder       record.EventRecorder
+	oldServiceCIDR string
 
 	serviceHealthServer healthcheck.ServiceHealthServer
 	healthzServer       healthcheck.ProxierHealthUpdater
@@ -267,6 +268,7 @@ func NewProxier(ipt utiliptables.Interface,
 	recorder record.EventRecorder,
 	healthzServer healthcheck.ProxierHealthUpdater,
 	nodePortAddresses []string,
+	oldServiceCIDR string,
 ) (*Proxier, error) {
 	// Set the route_localnet sysctl we need for
 	if err := utilproxy.EnsureSysctl(sysctl, sysctlRouteLocalnet, 1); err != nil {
@@ -322,6 +324,7 @@ func NewProxier(ipt utiliptables.Interface,
 		natRules:                 bytes.NewBuffer(nil),
 		nodePortAddresses:        nodePortAddresses,
 		networkInterfacer:        utilproxy.RealNetwork{},
+		oldServiceCIDR: oldServiceCIDR,
 	}
 
 	burstSyncs := 2
@@ -360,19 +363,20 @@ func NewDualStackProxier(
 	recorder record.EventRecorder,
 	healthzServer healthcheck.ProxierHealthUpdater,
 	nodePortAddresses []string,
+	oldServiceCIDR string,
 ) (proxy.Provider, error) {
 	// Create an ipv4 instance of the single-stack proxier
 	nodePortAddresses4, nodePortAddresses6 := utilproxy.FilterIncorrectCIDRVersion(nodePortAddresses, false)
 	ipv4Proxier, err := NewProxier(ipt[0], sysctl,
 		exec, syncPeriod, minSyncPeriod, masqueradeAll, masqueradeBit, localDetectors[0], hostname,
-		nodeIP[0], recorder, healthzServer, nodePortAddresses4)
+		nodeIP[0], recorder, healthzServer, nodePortAddresses4, oldServiceCIDR)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ipv4 proxier: %v", err)
 	}
 
 	ipv6Proxier, err := NewProxier(ipt[1], sysctl,
 		exec, syncPeriod, minSyncPeriod, masqueradeAll, masqueradeBit, localDetectors[1], hostname,
-		nodeIP[1], recorder, healthzServer, nodePortAddresses6)
+		nodeIP[1], recorder, healthzServer, nodePortAddresses6, oldServiceCIDR)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ipv6 proxier: %v", err)
 	}
@@ -980,6 +984,11 @@ func (proxier *Proxier) syncProxyRules() {
 		proxier.endpointChainsNumber += len(proxier.endpointsMap[svcName])
 	}
 
+	var oldServiceCIDR *net.IPNet = nil
+	if proxier.oldServiceCIDR != "" {
+		_, oldServiceCIDR ,_ = net.ParseCIDR(proxier.oldServiceCIDR)
+	}
+
 	// Build rules for each service.
 	for svcName, svc := range proxier.serviceMap {
 		svcInfo, ok := svc.(*serviceInfo)
@@ -1029,39 +1038,18 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 
 		// Capture the clusterIP.
-		if hasEndpoints {
-			args = append(args[:0],
-				"-A", string(kubeServicesChain),
-				"-m", "comment", "--comment", fmt.Sprintf(`"%s cluster IP"`, svcNameString),
-				"-m", protocol, "-p", protocol,
-				"-d", utilproxy.ToCIDR(svcInfo.ClusterIP()),
-				"--dport", strconv.Itoa(svcInfo.Port()),
-			)
-			if proxier.masqueradeAll {
-				writeLine(proxier.natRules, append(args, "-j", string(KubeMarkMasqChain))...)
-			} else if proxier.localDetector.IsImplemented() {
-				// This masquerades off-cluster traffic to a service VIP.  The idea
-				// is that you can establish a static route for your Service range,
-				// routing to any node, and that node will bridge into the Service
-				// for you.  Since that might bounce off-node, we masquerade here.
-				// If/when we support "Local" policy for VIPs, we should update this.
-				writeLine(proxier.natRules, proxier.localDetector.JumpIfNotLocal(args, string(KubeMarkMasqChain))...)
-			}
-			writeLine(proxier.natRules, append(args, "-j", string(svcChain))...)
-		} else {
-			// No endpoints.
-			writeLine(proxier.filterRules,
-				"-A", string(kubeServicesChain),
-				"-m", "comment", "--comment", fmt.Sprintf(`"%s has no endpoints"`, svcNameString),
-				"-m", protocol, "-p", protocol,
-				"-d", utilproxy.ToCIDR(svcInfo.ClusterIP()),
-				"--dport", strconv.Itoa(svcInfo.Port()),
-				"-j", "REJECT",
-			)
-		}
+		clusterIP := svcInfo.ClusterIP()
+		proxier.updateIPTablesForClusterIP(hasEndpoints, args, svcNameString, protocol, svcInfo, svcChain, clusterIP)
 
 		// Capture externalIPs.
 		for _, externalIP := range svcInfo.ExternalIPStrings() {
+
+			// hack to support second service cidr block.
+			ip := net.ParseIP(externalIP)
+			if oldServiceCIDR != nil && oldServiceCIDR.Contains(ip) {
+				proxier.updateIPTablesForClusterIP(hasEndpoints, args, svcNameString, protocol, svcInfo, svcChain, ip)
+			}
+
 			// If the "external" IP happens to be an IP that is local to this
 			// machine, hold the local port open so no other process can open it
 			// (because the socket might open but it would never work).
@@ -1615,6 +1603,41 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 	}
 	proxier.deleteEndpointConnections(endpointUpdateResult.StaleEndpoints)
+}
+
+func (proxier *Proxier) updateIPTablesForClusterIP(hasEndpoints bool, args []string, svcNameString string,
+	protocol string, svcInfo *serviceInfo, svcChain utiliptables.Chain, clusterIP net.IP) []string {
+	if hasEndpoints {
+		args = append(args[:0],
+			"-A", string(kubeServicesChain),
+			"-m", "comment", "--comment", fmt.Sprintf(`"%s cluster IP"`, svcNameString),
+			"-m", protocol, "-p", protocol,
+			"-d", utilproxy.ToCIDR(clusterIP),
+			"--dport", strconv.Itoa(svcInfo.Port()),
+		)
+		if proxier.masqueradeAll {
+			writeLine(proxier.natRules, append(args, "-j", string(KubeMarkMasqChain))...)
+		} else if proxier.localDetector.IsImplemented() {
+			// This masquerades off-cluster traffic to a service VIP.  The idea
+			// is that you can establish a static route for your Service range,
+			// routing to any node, and that node will bridge into the Service
+			// for you.  Since that might bounce off-node, we masquerade here.
+			// If/when we support "Local" policy for VIPs, we should update this.
+			writeLine(proxier.natRules, proxier.localDetector.JumpIfNotLocal(args, string(KubeMarkMasqChain))...)
+		}
+		writeLine(proxier.natRules, append(args, "-j", string(svcChain))...)
+	} else {
+		// No endpoints.
+		writeLine(proxier.filterRules,
+			"-A", string(kubeServicesChain),
+			"-m", "comment", "--comment", fmt.Sprintf(`"%s has no endpoints"`, svcNameString),
+			"-m", protocol, "-p", protocol,
+			"-d", utilproxy.ToCIDR(clusterIP),
+			"--dport", strconv.Itoa(svcInfo.Port()),
+			"-j", "REJECT",
+		)
+	}
+	return args
 }
 
 // Join all words with spaces, terminate with newline and write to buf.
