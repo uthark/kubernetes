@@ -420,6 +420,12 @@ func (rs *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObj
 				allocator.Release(net.ParseIP(oldService.Spec.ClusterIP))
 			}
 		}
+		if oldService.Spec.ClusterIP != "" && service.Spec.ClusterIP == "" {
+			allocator := rs.getAllocatorBySpec(service)
+			if releaseServiceIP, err = initClusterIP(service, allocator); err != nil {
+				return nil, false, err
+			}
+		}
 	}
 	// Update service from NodePort or LoadBalancer to ExternalName or ClusterIP, should release NodePort if exists.
 	if (oldService.Spec.Type == api.ServiceTypeNodePort || oldService.Spec.Type == api.ServiceTypeLoadBalancer) &&
